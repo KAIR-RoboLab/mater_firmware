@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
+#include "pico_uart_transports.h"
 
 #include <uxr/client/profile/transport/custom/custom_transport.h>
 
@@ -27,7 +28,7 @@ bool pico_serial_transport_close(struct uxrCustomTransport * transport)
     return true;
 }
 
-size_t pico_serial_transport_write(struct uxrCustomTransport * transport, uint8_t *buf, size_t len, uint8_t *errcode)
+size_t pico_serial_transport_write(struct uxrCustomTransport* transport, const uint8_t * buf, size_t len, uint8_t * errcode)
 {
     for (size_t i = 0; i < len; i++)
     {
