@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
+#include "hardware/uart.h"
 #include "pico_uart_transports.h"
 
 #include <uxr/client/profile/transport/custom/custom_transport.h>
@@ -19,12 +20,13 @@ int clock_gettime(clockid_t unused, struct timespec *tp)
 
 bool pico_serial_transport_open(struct uxrCustomTransport * transport)
 {
-    stdio_init_all();
+    uart_init(uart0, 115200);
     return true;
 }
 
 bool pico_serial_transport_close(struct uxrCustomTransport * transport)
 {
+    uart_deinit(uart0);
     return true;
 }
 
@@ -32,11 +34,7 @@ size_t pico_serial_transport_write(struct uxrCustomTransport* transport, const u
 {
     for (size_t i = 0; i < len; i++)
     {
-        if (buf[i] != putchar(buf[i]))
-        {
-            *errcode = 1;
-            return i;
-        }
+        uart_putc(uart0, buf[i]);
     }
     return len;
 }
@@ -53,7 +51,7 @@ size_t pico_serial_transport_read(struct uxrCustomTransport * transport, uint8_t
             return i;
         }
 
-        int character = getchar_timeout_us(elapsed_time_us);
+        int character = uart_getc(uart0);
         if (character == PICO_ERROR_TIMEOUT)
         {
             *errcode = 1;
