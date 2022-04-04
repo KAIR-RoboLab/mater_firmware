@@ -1,21 +1,15 @@
 #include <Arduino.h>
 
-#include <FreeRTOS.h>
-#include <queue.h>
-#include <task.h>
-
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
 #include <rmw_microros/rmw_microros.h>
+#include <uxr/client/transport.h>
+
 
 #include <std_msgs/msg/int32.h>
 #include <std_msgs/msg/float32.h>
-
-#include "pico_uart_transports.h"
-#include "maker_pi_pins.h"
-
 
 rcl_publisher_t publisher;
 std_msgs__msg__Int32 msg;
@@ -29,6 +23,12 @@ rcl_timer_t timer;
 
 #define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){error_loop();}}
 #define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){}}
+
+
+extern "C" bool arduino_transport_open(struct uxrCustomTransport * transport);
+extern "C" bool arduino_transport_close(struct uxrCustomTransport * transport);
+extern "C" size_t arduino_transport_write(struct uxrCustomTransport* transport, const uint8_t * buf, size_t len, uint8_t * err);
+extern "C" size_t arduino_transport_read(struct uxrCustomTransport* transport, uint8_t* buf, size_t len, int timeout, uint8_t* err);
 
 
 void error_loop(){
@@ -51,10 +51,10 @@ void setup() {
   rmw_uros_set_custom_transport(
 		true,
 		NULL,
-		pico_serial_transport_open,
-		pico_serial_transport_close,
-		pico_serial_transport_write,
-		pico_serial_transport_read
+		arduino_transport_open,
+		arduino_transport_close,
+		arduino_transport_write,
+		arduino_transport_read
 	);
   
   pinMode(LED_PIN, OUTPUT);
