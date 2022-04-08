@@ -1,12 +1,14 @@
 #include <Arduino.h>
 
+// #include <micro_ros_arduino.h>
+
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
-#include <rmw_microros/rmw_microros.h>
 #include <uxr/client/transport.h>
-
+#include <rmw_microros/rmw_microros.h>
+#include "maker_pi_transport.h"
 
 #include <std_msgs/msg/int32.h>
 #include <std_msgs/msg/float32.h>
@@ -24,13 +26,6 @@ rcl_timer_t timer;
 #define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){error_loop();}}
 #define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){}}
 
-
-extern "C" bool arduino_transport_open(struct uxrCustomTransport * transport);
-extern "C" bool arduino_transport_close(struct uxrCustomTransport * transport);
-extern "C" size_t arduino_transport_write(struct uxrCustomTransport* transport, const uint8_t * buf, size_t len, uint8_t * err);
-extern "C" size_t arduino_transport_read(struct uxrCustomTransport* transport, uint8_t* buf, size_t len, int timeout, uint8_t* err);
-
-
 void error_loop(){
   while(1){
     digitalWrite(LED_PIN, !digitalRead(LED_PIN));
@@ -44,21 +39,24 @@ void timer_callback(rcl_timer_t * timer, int64_t last_call_time)
   if (timer != NULL) {
     RCSOFTCHECK(rcl_publish(&publisher, &msg, NULL));
     msg.data++;
+    // Serial.println("aaaaa");
   }
 }
 
 void setup() {
+
   rmw_uros_set_custom_transport(
 		true,
 		NULL,
-		arduino_transport_open,
-		arduino_transport_close,
-		arduino_transport_write,
-		arduino_transport_read
+		maker_pi_transport_open,
+		maker_pi_transport_close,
+		maker_pi_transport_write,
+		maker_pi_transport_read
 	);
   
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH);  
+  // Serial.begin(9600);
   
   delay(2000);
 
@@ -68,17 +66,17 @@ void setup() {
   RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
 
   // create node
-  RCCHECK(rclc_node_init_default(&node, "micro_ros_arduino_node", "", &support));
+  RCCHECK(rclc_node_init_default(&node, "micro_ros_maker_pi_node", "", &support));
 
   // create publisher
   RCCHECK(rclc_publisher_init_default(
     &publisher,
     &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-    "micro_ros_arduino_node_publisher"));
+    "micro_ros_maker_pi_node_publisher"));
 
   // create timer,
-  const unsigned int timer_timeout = 1000;
+  const unsigned int timer_timeout = 10;
   RCCHECK(rclc_timer_init_default(
     &timer,
     &support,
@@ -93,6 +91,6 @@ void setup() {
 }
 
 void loop() {
-  delay(100);
+  // delay(1);
   RCSOFTCHECK(rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100)));
 }
