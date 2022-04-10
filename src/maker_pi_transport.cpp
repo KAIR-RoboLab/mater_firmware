@@ -28,26 +28,26 @@ int clock_gettime(clockid_t unused, struct timespec *tp)
 
 bool maker_pi_transport_open(struct uxrCustomTransport * transport)
 {
-  Serial.begin(115200);
+  Serial1.begin(576000);
   return true;
 }
 
 bool maker_pi_transport_close(struct uxrCustomTransport * transport)
 {
-  Serial.end();
+  Serial1.end();
   return true;
 }
 
 size_t maker_pi_transport_write(struct uxrCustomTransport * transport, const uint8_t *buf, size_t len, uint8_t *errcode)
 {
   (void)errcode;
-  size_t sent = Serial.write(buf, len);
+  size_t sent = Serial1.write(buf, len);
   return sent;
 }
 
 size_t maker_pi_transport_read(struct uxrCustomTransport * transport, uint8_t *buf, size_t len, int timeout, uint8_t *errcode)
 {
   (void)errcode;
-  Serial.setTimeout(timeout);
-  return Serial.readBytes((char *)buf, len);
+  Serial1.setTimeout(timeout);
+  return Serial1.readBytes((char *)buf, len);
 }
