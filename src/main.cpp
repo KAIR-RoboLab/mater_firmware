@@ -344,7 +344,7 @@ inline void set_control(uint pin_forward, uint pin_backward, double value)
   }
   if (value > 0.0)
   {
-    // Remeber kids. First we are clearing other PWM channel before we assign new controls
+    // Remember kids. First we are clearing other PWM channel before we assign new controls
     pwm_set_gpio_level(pin_backward, uint16_t(0));
     pwm_set_gpio_level(pin_forward, uint16_t(value * double(PWM_RESIZE_FACTOR)));
   }
