@@ -244,7 +244,7 @@ bool create_entities()
       &odometry_publisher,
       &node,
       ROSIDL_GET_MSG_TYPE_SUPPORT(nav_msgs, msg, Odometry),
-      "/odometry/wheels"));
+      "muter/odom"));
 
   // create /joint_state topic publisher
   RCCHECK(rclc_publisher_init_default(
