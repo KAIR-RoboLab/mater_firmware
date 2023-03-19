@@ -1,6 +1,6 @@
 # Muter firmware
 
-# Changing ROS_DOMAIN_ID
+## Changing ROS_DOMAIN_ID
 
 In [platform.ini](./platformio.ini) change line:
 ``` ini
@@ -8,11 +8,11 @@ build_flags =
     '-D ROS_DOMAIN_ID=my_cool_domain_id'
 ```
 
-# Pinout
+## Pinout
 
 Pinout is based on official [documentation](https://docs.google.com/document/d/1DJASwxgbattM37V4AIlJVR4pxukq0up25LppA8-z_AY/edit). Below table show Groove pin names used in [maker_pi_pins.h](./include/maker_pi_pins.h) file.
 
-## Groove connectors
+### Groove connectors
 
 |    Name    | GPIO |   PWM  | SPI  | I2C  | UART | Analog |
 |:----------:|:----:|:------:|:----:|:----:|:----:|:------:|
@@ -31,7 +31,7 @@ Pinout is based on official [documentation](https://docs.google.com/document/d/1
 | GROOVE_7_A |  7   | PWM3-B | SDO0 | SCL1 |  -   |    -   |
 | GROOVE_7_B |  28  | PWM6-A |   -  |  -   |  -   |  ADC2  |
 
-## Other connectors
+### Other connectors
 
 |     Name     | GPIO | Function          |
 |:------------:|:----:|-------------------|
