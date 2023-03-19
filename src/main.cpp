@@ -246,12 +246,12 @@ bool create_entities()
       ROSIDL_GET_MSG_TYPE_SUPPORT(nav_msgs, msg, Odometry),
       "muter/odom"));
 
-  // create /joint_state topic publisher
+  // create /joint_statestopic publisher
   RCCHECK(rclc_publisher_init_default(
       &joint_state_publisher,
       &node,
       ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, JointState),
-      "/joint_state"));
+      "/joint_states"));
 
   // create timer running at 10 Hz
   const unsigned int publish_timer_timeout = 100;
@@ -271,7 +271,7 @@ bool create_entities()
   odometry_msg.header.frame_id = micro_ros_string_utilities_init("odom");
   odometry_msg.child_frame_id = micro_ros_string_utilities_init("base_link");
 
-  // Initialise /joint_state message
+  // Initialise /joint_statesmessage
   joint_state_msg.header.frame_id = micro_ros_string_utilities_init("base_link");
   joint_state_msg.name.data = (rosidl_runtime_c__String *)malloc(3 * sizeof(rosidl_runtime_c__String));
   joint_state_msg.name.size = 2;
