@@ -1,5 +1,5 @@
-#ifndef MAKER_PI_TRANSPORT
-#define MAKER_PI_TRANSPORT
+#ifndef MAKER_PI_TRANSPORT__H
+#define MAKER_PI_TRANSPORT__H
 
 #include <Arduino.h>
 #include <stdio.h>
@@ -12,4 +12,4 @@ bool maker_pi_transport_close(struct uxrCustomTransport * transport);
 size_t maker_pi_transport_write(struct uxrCustomTransport * transport, const uint8_t *buf, size_t len, uint8_t *errcode);
 size_t maker_pi_transport_read(struct uxrCustomTransport * transport, uint8_t *buf, size_t len, int timeout, uint8_t *errcode);
 
-#endif // MAKER_PI_TRANSPORT
+#endif // MAKER_PI_TRANSPORT__H

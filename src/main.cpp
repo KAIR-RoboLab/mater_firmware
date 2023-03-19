@@ -5,6 +5,13 @@
 #include <time.h>
 #include <math.h>
 
+// RP2040 multicore libraries
+extern "C"
+{
+#include <pico/multicore.h>
+#include <pico_sync/include/pico/mutex.h>
+}
+
 // microros dependencies
 #include <micro_ros_platformio.h>
 #include <rcl/rcl.h>
@@ -22,13 +29,16 @@
 #include <geometry_msgs/msg/twist.h>
 #include <std_msgs/msg/string.h>
 #include <sensor_msgs/msg/joint_state.h>
+#include <sensor_msgs/msg/imu.h>
 
 // external libraries
-#include <PID_v1.h>
 #include <pio_rotary_encoder.h>
 
 // custom transport layer definition
 #include "maker_pi_transport.h"
+#include "pwm_conf.h"
+#include "pid.h"
+#include "utils.h"
 
 #define ERROR_LOOP_LED_PIN (16)
 #define RCCHECK(fn)              \
@@ -80,40 +90,49 @@ int RotaryEncoder::rotation_motor_b = 0;
 RotaryEncoder encoder_left(2, 3, MOTOR_A_SM);
 RotaryEncoder encoder_right(26, 27, MOTOR_B_SM);
 
-// allocate space for previous encoder readings
-double last_rotation_left;
-double last_rotation_right;
+// Stuctures used to pass messages between CPU cores
+typedef struct
+{
+  double position;
+  double velocity;
+  double effort;
+} joint_state_t;
 
-// PID gains
-#define Kp (0.0)
-#define Ki (0.01)
-#define Kd (0.0)
-#define PWM_MAX_VAL (65535)
+volatile joint_state_t left_wheel_state;
+volatile joint_state_t right_wheel_state;
+volatile double left_wheel_setpoint;
+volatile double right_wheel_setpoint;
 
-// define PID for wheels
-double state_left, output_left, setpoint_left;
-double state_right, output_right, setpoint_right;
-double current_rotation_left;
-double current_rotation_right;
+mutex_t msg_sync_mutex;
 
-PID pid_left_wheel(&state_left, &output_left, &setpoint_left, Kp, Ki, Kd, AUTOMATIC);
-PID pid_right_wheel(&state_right, &output_right, &setpoint_right, Kp, Ki, Kd, AUTOMATIC);
+// Stuct holding robot position used to compute odometry
+typedef struct
+{
+  double x;
+  double y;
+  double theta;
+} robot_state_t;
 
+robot_state_t robot_state;
+
+// Required for time sync
 extern int clock_gettime(clockid_t unused, struct timespec *tp);
 
+// Create handles for RCLC objects
 rclc_support_t support;
 rcl_node_t node;
 rcl_timer_t publish_timer;
-rcl_timer_t control_timer;
 rclc_executor_t executor;
 rcl_allocator_t allocator;
 rcl_subscription_t cmd_vel_subscriber;
 rcl_publisher_t odometry_publisher;
 rcl_publisher_t joint_state_publisher;
+rcl_publisher_t imu_publisher;
 nav_msgs__msg__Odometry odometry_msg;
 geometry_msgs__msg__Twist cmd_vel_msg;
 sensor_msgs__msg__JointState joint_state_msg;
 
+// Init values for uROS connection sm
 bool micro_ros_init_successful;
 
 enum states
@@ -124,109 +143,79 @@ enum states
   AGENT_DISCONNECTED
 } state;
 
-void euler_to_quat(float x, float y, float z, double *q)
-{
-  float c1 = cos((y * PI / 180.0) / 2.0);
-  float c2 = cos((z * PI / 180.0) / 2.0);
-  float c3 = cos((x * PI / 180.0) / 2.0);
-
-  float s1 = sin((y * PI / 180.0) / 2.0);
-  float s2 = sin((z * PI / 180.0) / 2.0);
-  float s3 = sin((x * PI / 180.0) / 2.0);
-
-  q[0] = c1 * c2 * c3 - s1 * s2 * s3;
-  q[1] = s1 * s2 * c3 + c1 * c2 * s3;
-  q[2] = s1 * c2 * c3 + c1 * s2 * s3;
-  q[3] = c1 * s2 * c3 - s1 * c2 * s3;
-}
-
-float tic_to_rad(long tics)
-{
-  static const long gear_reduction = 120;
-  static const long tics_per_rotation = 32;
-  return float(tics) / float(gear_reduction * tics_per_rotation) * M_PI * 2.0;
-}
-
-inline double wrap_angle(float rad)
-{
-  return atan2(sin(rad), cos(rad));
-}
-
-void set_control(int pin_forward, int pin_backward, double value)
-{
-  if (value >= 0)
-  {
-    analogWrite(pin_forward, (int)(value * PWM_MAX_VAL));
-  }
-  else 
-  {
-    analogWrite(pin_backward, (int)(-value * PWM_MAX_VAL));
-  }
-}
-
 void subscription_callback(const void *msgin)
 {
   const geometry_msgs__msg__Twist *msg = (const geometry_msgs__msg__Twist *)msgin;
-  cmd_vel_msg.linear.x = msg->linear.x;
-  cmd_vel_msg.angular.z = msg->angular.z;
+  double lin_x = msg->linear.x;
+  double ang_z = msg->angular.z;
+
+  double vr = (ang_z * (-wheel_separation / 2.0) + lin_x) / M_PI / wheel_radius;
+  double vl = (ang_z * (wheel_separation / 2.0) + lin_x) / M_PI / wheel_radius;
+
+  // Pass setpoints via thread-save mutex
+  if (mutex_try_enter(&msg_sync_mutex, NULL))
+  {
+    left_wheel_setpoint = vr;
+    right_wheel_setpoint = vl;
+    mutex_exit(&msg_sync_mutex);
+  }
 }
 
 void publisher_timer_callback(rcl_timer_t *timer, int64_t last_call_time)
 {
-  // update time stamp
-  struct timespec tv = {0};
-  clock_gettime(0, &tv);
-  odometry_msg.header.stamp.nanosec = tv.tv_nsec;
-  odometry_msg.header.stamp.sec = tv.tv_sec;
-
-  joint_state_msg.header.stamp.nanosec = tv.tv_nsec;
-  joint_state_msg.header.stamp.sec = tv.tv_sec;
-  joint_state_msg.position.data[0] = wrap_angle(current_rotation_left);
-  joint_state_msg.position.data[1] = wrap_angle(current_rotation_right);
-
-  joint_state_msg.velocity.data[0] = state_left;
-  joint_state_msg.velocity.data[1] = state_right;
-
-  joint_state_msg.effort.data[0] = output_left;
-  joint_state_msg.effort.data[1] = output_right;
-
-  // publish odometry message
-  RCSOFTCHECK(rcl_publish(&odometry_publisher, &odometry_msg, NULL));
-  RCSOFTCHECK(rcl_publish(&joint_state_publisher, &joint_state_msg, NULL));
-}
-
-void control_timer_callback(rcl_timer_t *timer, int64_t last_call_time)
-{
-  (void)last_call_time;
+  RCLC_UNUSED(last_call_time);
   if (timer != NULL)
   {
-    int64_t time_elapsed;
-    RCSOFTCHECK(rcl_timer_get_time_since_last_call(timer, &time_elapsed));
-    double seconds_elapsed = double(time_elapsed) / 1000000.0f;
+    // update time stamp
+    struct timespec tv = {0};
+    clock_gettime(0, &tv);
+    odometry_msg.header.stamp.nanosec = tv.tv_nsec;
+    odometry_msg.header.stamp.sec = tv.tv_sec;
 
-    // update encode readings
-    current_rotation_left = tic_to_rad(encoder_left.get_rotation());
-    current_rotation_right = -tic_to_rad(encoder_right.get_rotation());
+    joint_state_msg.header.stamp.nanosec = tv.tv_nsec;
+    joint_state_msg.header.stamp.sec = tv.tv_sec;
 
-    // MODIFY CODE BELOW
+    // Get data from PID controller via thread-save mutex
+    if (mutex_try_enter(&msg_sync_mutex, NULL))
+    {
+      joint_state_msg.position.data[0] = wrap_angle(left_wheel_state.position);
+      joint_state_msg.velocity.data[0] = left_wheel_state.velocity;
+      joint_state_msg.effort.data[0] = left_wheel_state.effort;
 
-    setpoint_left = (double)cmd_vel_msg.linear.x;
-    state_left = (current_rotation_left - last_rotation_left) / seconds_elapsed;
-    pid_left_wheel.Compute();
-    set_control(10, 11, -output_left);
+      joint_state_msg.position.data[1] = wrap_angle(right_wheel_state.position);
+      joint_state_msg.velocity.data[1] = right_wheel_state.velocity;
+      joint_state_msg.effort.data[1] = right_wheel_state.effort;
+      mutex_exit(&msg_sync_mutex);
+    }
 
-    setpoint_right = (double)cmd_vel_msg.linear.x;
-    state_right = (current_rotation_right - last_rotation_right) / seconds_elapsed;
-    pid_right_wheel.Compute();
-    set_control(9, 8, -output_right);
+    double dt = 0.01;
 
-    odometry_msg.twist.twist.linear.x = ((double)state_left + (double)state_right) / 2.0;
+    double vl = joint_state_msg.velocity.data[0];
+    double vr = joint_state_msg.velocity.data[1];
+    double omega = (vr - vl) / 2.0;
+    double lin_vel = (vl + vr) / 2.0;
 
-    // END OF YOUR CODE
+    odometry_msg.twist.twist.linear.x = lin_vel * cos(robot_state.theta);
+    odometry_msg.twist.twist.linear.y = lin_vel * sin(robot_state.theta);
+    robot_state.x += odometry_msg.twist.twist.linear.x * dt;
+    robot_state.y += odometry_msg.twist.twist.linear.y * dt;
 
-    // set current encoder readings to be last ones
-    last_rotation_left = current_rotation_left;
-    last_rotation_right = current_rotation_right;
+    robot_state.theta += omega * dt;
+    odometry_msg.twist.twist.angular.z = omega;
+
+    odometry_msg.pose.pose.position.x = robot_state.x;
+    odometry_msg.pose.pose.position.y = robot_state.y;
+
+    double q[4];
+    euler_to_quat(0.0, 0.0, robot_state.theta, q);
+    odometry_msg.pose.pose.orientation.w = q[0];
+    odometry_msg.pose.pose.orientation.x = q[1];
+    odometry_msg.pose.pose.orientation.y = q[2];
+    odometry_msg.pose.pose.orientation.z = q[3];
+
+    // publish odometry and joint state messages
+    RCSOFTCHECK(rcl_publish(&odometry_publisher, &odometry_msg, NULL));
+    RCSOFTCHECK(rcl_publish(&joint_state_publisher, &joint_state_msg, NULL));
   }
 }
 
@@ -236,12 +225,12 @@ bool create_entities()
 
   // create init_options
   rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
-  rcl_init_options_init(&init_options, allocator);
-  rcl_init_options_set_domain_id(&init_options, ROS_DOMAIN_ID);
+  RCCHECK(rcl_init_options_init(&init_options, allocator));
+  RCCHECK(rcl_init_options_set_domain_id(&init_options, ROS_DOMAIN_ID));
   RCCHECK(rclc_support_init_with_options(&support, 0, NULL, &init_options, &allocator));
 
   // create node
-  RCCHECK(rclc_node_init_default(&node, "rmbot_hardware_node", "", &support));
+  RCCHECK(rclc_node_init_default(&node, "muter_hardware_node", "", &support));
 
   // create subscriber
   RCCHECK(rclc_subscription_init_default(
@@ -272,27 +261,18 @@ bool create_entities()
       RCL_MS_TO_NS(publish_timer_timeout),
       publisher_timer_callback));
 
-  // create timer running at 200 Hz
-  const unsigned int control_timer_timeout = 5;
-  RCCHECK(rclc_timer_init_default(
-      &control_timer,
-      &support,
-      RCL_MS_TO_NS(control_timer_timeout),
-      control_timer_callback));
-
   // create executor
   executor = rclc_executor_get_zero_initialized_executor();
-  RCCHECK(rclc_executor_init(&executor, &support.context, 4, &allocator));
+  RCCHECK(rclc_executor_init(&executor, &support.context, 3, &allocator));
   RCCHECK(rclc_executor_add_timer(&executor, &publish_timer));
-  RCCHECK(rclc_executor_add_timer(&executor, &control_timer));
   RCCHECK(rclc_executor_add_subscription(&executor, &cmd_vel_subscriber, &cmd_vel_msg, &subscription_callback, ON_NEW_DATA));
 
   // set frame id for transform between parent and child in odometry message
-  odometry_msg.header.frame_id = micro_ros_string_utilities_set(odometry_msg.header.frame_id, "odom");
-  odometry_msg.child_frame_id = micro_ros_string_utilities_set(odometry_msg.child_frame_id, "base_link");
+  odometry_msg.header.frame_id = micro_ros_string_utilities_init("odom");
+  odometry_msg.child_frame_id = micro_ros_string_utilities_init("base_link");
 
   // Initialise /joint_state message
-  joint_state_msg.header.frame_id = micro_ros_string_utilities_set(joint_state_msg.header.frame_id, "base_link");
+  joint_state_msg.header.frame_id = micro_ros_string_utilities_init("base_link");
   joint_state_msg.name.data = (rosidl_runtime_c__String *)malloc(3 * sizeof(rosidl_runtime_c__String));
   joint_state_msg.name.size = 2;
   joint_state_msg.name.capacity = 2;
@@ -344,20 +324,123 @@ void destroy_entities()
   RCSOFTCHECK(rcl_publisher_fini(&odometry_publisher, &node));
   RCSOFTCHECK(rcl_publisher_fini(&joint_state_publisher, &node));
   RCSOFTCHECK(rcl_timer_fini(&publish_timer));
-  RCSOFTCHECK(rcl_timer_fini(&control_timer));
   RCSOFTCHECK(rclc_executor_fini(&executor));
   RCSOFTCHECK(rcl_node_fini(&node));
   RCSOFTCHECK(rclc_support_fini(&support));
 }
 
-void setup()
+inline void set_control(uint pin_forward, uint pin_backward, double value)
 {
+  if (value > 0.0)
+  {
+    pwm_set_gpio_level(pin_forward, uint16_t(value * double(MAX_PWM_VAL)));
+  }
+  else
+  {
+    pwm_set_gpio_level(pin_backward, uint16_t(-value * double(MAX_PWM_VAL)));
+  }
+}
+
+void core1_entry()
+{
+  // 25 Hz
+  const uint64_t loop_time_us = 40000;
+
+  // define PID for wheels
+  PID_stat_t left_wheel_pid_stats = {
+      .kp = 0.0,
+      .ki = 0.4,
+      .kd = 0.0,
+      .out_min = -1.0,
+      .out_max = 1.0,
+      .dt = US_TO_S_D(loop_time_us)};
+
+  PID_stat_t right_wheel_pid_stats = {
+      .kp = 0.0,
+      .ki = 0.4,
+      .kd = 0.0,
+      .out_min = -1.0,
+      .out_max = 1.0,
+      .dt = US_TO_S_D(loop_time_us)};
+
+  // Init state structures
+  joint_state_t local_left_wheel_state = {0};
+  joint_state_t local_right_wheel_state = {0};
+  double local_left_wheel_setpoint = 0.0;
+  double local_right_wheel_setpoint = 0.0;
+  double last_position_left = 0.0;
+  double last_position_right = 0.0;
+
   // initialise encoders
   encoder_left.set_rotation(0);
   encoder_right.set_rotation(0);
 
+  absolute_time_t start_time;
+  absolute_time_t sleep_until_time;
+
+  // Setup PWM
+  setup_pin_pwm(10);
+  setup_pin_pwm(11);
+  setup_pin_pwm(8);
+  setup_pin_pwm(9);
+
+  while (true)
+  {
+    start_time = get_absolute_time();
+    sleep_until_time = delayed_by_us(start_time, loop_time_us);
+
+    // Non blocking acquire of mutex
+    if (mutex_try_enter(&msg_sync_mutex, NULL))
+    {
+      local_left_wheel_setpoint = left_wheel_setpoint;
+      local_right_wheel_setpoint = right_wheel_setpoint;
+      mutex_exit(&msg_sync_mutex);
+    }
+
+    // update encode readings
+    last_position_left = local_left_wheel_state.position;
+    last_position_right = local_right_wheel_state.position;
+    local_left_wheel_state.position = tic_to_rad(encoder_left.get_rotation());
+    local_right_wheel_state.position = -tic_to_rad(encoder_right.get_rotation());
+
+    local_left_wheel_state.velocity = (local_left_wheel_state.position - last_position_left) / US_TO_S_D(loop_time_us);
+    double left_wheel_error = local_left_wheel_state.velocity - local_left_wheel_setpoint;
+    double left_wheel_control = pid_compute(&left_wheel_pid_stats, left_wheel_error);
+    set_control(11, 10, left_wheel_control);
+
+    local_right_wheel_state.velocity = (local_right_wheel_state.position - last_position_right) / US_TO_S_D(loop_time_us);
+    double right_wheel_error = local_right_wheel_state.velocity - local_right_wheel_setpoint;
+    double right_wheel_control = pid_compute(&right_wheel_pid_stats, right_wheel_error);
+    set_control(8, 9, right_wheel_control);
+
+    // Non blocking acquire of mutex
+    if (mutex_try_enter(&msg_sync_mutex, NULL))
+    {
+      left_wheel_state.position = local_left_wheel_state.position;
+      left_wheel_state.velocity = local_left_wheel_state.velocity;
+      left_wheel_state.effort = NAN;
+
+      right_wheel_state.position = local_right_wheel_state.position;
+      right_wheel_state.velocity = local_right_wheel_state.velocity;
+      right_wheel_state.effort = NAN;
+      mutex_exit(&msg_sync_mutex);
+    }
+
+    sleep_until(sleep_until_time);
+  }
+}
+
+void setup()
+{
   Serial.begin(115200);
   delay(1000);
+
+  mutex_init(&msg_sync_mutex);
+
+  // init odometry
+  robot_state.x = 0.0;
+  robot_state.y = 0.0;
+  robot_state.theta = 0.0;
 
   // setup microros transport layer
   rmw_uros_set_custom_transport(
@@ -372,15 +455,8 @@ void setup()
   pinMode(ERROR_LOOP_LED_PIN, OUTPUT);
   digitalWrite(ERROR_LOOP_LED_PIN, LOW);
 
-  // configure PID
-  pid_left_wheel.SetMode(AUTOMATIC);
-  pid_right_wheel.SetMode(AUTOMATIC);
-
-  pid_left_wheel.SetSampleTime(1);
-  pid_right_wheel.SetSampleTime(1);
-
-  pid_left_wheel.SetOutputLimits(-1.0, 1.0);
-  pid_right_wheel.SetOutputLimits(-1.0, 1.0);
+  // Launch Core 1 of rp2040
+  multicore_launch_core1(core1_entry);
 
   state = WAITING_AGENT;
   Serial.println("Init passed");

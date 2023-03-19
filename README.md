@@ -1,4 +1,12 @@
-# maker_pi_rp2040_robot
+# Muter firmware
+
+# Changing ROS_DOMAIN_ID
+
+In [platform.ini](./platformio.ini) change line:
+``` ini
+build_flags =
+    '-D ROS_DOMAIN_ID=my_cool_domain_id'
+```
 
 # Pinout
 
