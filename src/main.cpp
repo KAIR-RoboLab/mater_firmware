@@ -115,8 +115,6 @@ typedef struct
 
 robot_state_t robot_state;
 
-// Required for time sync
-extern int clock_gettime(clockid_t unused, struct timespec *tp);
 
 // Create handles for RCLC objects
 rclc_support_t support;
@@ -167,13 +165,16 @@ void publisher_timer_callback(rcl_timer_t *timer, int64_t last_call_time)
   if (timer != NULL)
   {
     // update time stamp
-    struct timespec tv = {0};
-    clock_gettime(0, &tv);
-    odometry_msg.header.stamp.nanosec = tv.tv_nsec;
-    odometry_msg.header.stamp.sec = tv.tv_sec;
+    int64_t time = rmw_uros_epoch_nanos();
+    int32_t time_sec = RCUTILS_NS_TO_S(time);
+    // Wrap every second
+    int32_t time_nsec = (time % RCUTILS_S_TO_NS(1));
 
-    joint_state_msg.header.stamp.nanosec = tv.tv_nsec;
-    joint_state_msg.header.stamp.sec = tv.tv_sec;
+    odometry_msg.header.stamp.nanosec = time_nsec;
+    odometry_msg.header.stamp.sec = time_sec;
+
+    joint_state_msg.header.stamp.nanosec = time_nsec;
+    joint_state_msg.header.stamp.sec = time_sec;
 
     // Get data from PID controller via thread-save mutex
     if (mutex_try_enter(&msg_sync_mutex, NULL))
@@ -195,10 +196,10 @@ void publisher_timer_callback(rcl_timer_t *timer, int64_t last_call_time)
     double omega = (vr - vl) / 2.0;
     double lin_vel = (vl + vr) / 2.0;
 
-    odometry_msg.twist.twist.linear.x = lin_vel * cos(robot_state.theta);
-    odometry_msg.twist.twist.linear.y = lin_vel * sin(robot_state.theta);
-    robot_state.x += odometry_msg.twist.twist.linear.x * dt;
-    robot_state.y += odometry_msg.twist.twist.linear.y * dt;
+    odometry_msg.twist.twist.linear.x = lin_vel * cos(robot_state.theta) * dt;
+    odometry_msg.twist.twist.linear.y = lin_vel * sin(robot_state.theta) * dt;
+    robot_state.x += odometry_msg.twist.twist.linear.x;
+    robot_state.y += odometry_msg.twist.twist.linear.y;
 
     robot_state.theta += omega * dt;
     odometry_msg.twist.twist.angular.z = omega;
@@ -301,12 +302,9 @@ bool create_entities()
   }
 
   // synchronize time between uROS and uROS agent
-  static time_t timeout_ms = 100;
-  static int64_t time_ms = 0;
-  while (time_ms <= 0)
+  while (!rmw_uros_epoch_synchronized())
   {
-    RCCHECK(rmw_uros_sync_session(timeout_ms));
-    time_ms = rmw_uros_epoch_millis();
+    RCCHECK(rmw_uros_sync_session(100));
   }
   Serial.println("Node initialised");
   return true;
