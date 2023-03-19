@@ -115,6 +115,7 @@ typedef struct
 
 robot_state_t robot_state;
 
+int64_t last_time = 0;
 
 // Create handles for RCLC objects
 rclc_support_t support;
@@ -147,14 +148,14 @@ void subscription_callback(const void *msgin)
   double lin_x = msg->linear.x;
   double ang_z = msg->angular.z;
 
-  double vr = (ang_z * (-wheel_separation / 2.0) + lin_x) / M_PI / wheel_radius;
-  double vl = (ang_z * (wheel_separation / 2.0) + lin_x) / M_PI / wheel_radius;
+  double vr = (ang_z * (wheel_separation / 2.0) + lin_x) / wheel_diameter;
+  double vl = (ang_z * (-wheel_separation / 2.0) + lin_x) / wheel_diameter;
 
   // Pass setpoints via thread-save mutex
   if (mutex_try_enter(&msg_sync_mutex, NULL))
   {
-    left_wheel_setpoint = vr;
-    right_wheel_setpoint = vl;
+    left_wheel_setpoint = vl;
+    right_wheel_setpoint = vr;
     mutex_exit(&msg_sync_mutex);
   }
 }
@@ -164,12 +165,17 @@ void publisher_timer_callback(rcl_timer_t *timer, int64_t last_call_time)
   RCLC_UNUSED(last_call_time);
   if (timer != NULL)
   {
+
     // update time stamp
     int64_t time = rmw_uros_epoch_nanos();
     int32_t time_sec = RCUTILS_NS_TO_S(time);
     // Wrap every second
     int32_t time_nsec = (time % RCUTILS_S_TO_NS(1));
 
+    if (last_time == 0)
+    {
+      last_time = time - RCUTILS_MS_TO_NS(100);
+    }
     odometry_msg.header.stamp.nanosec = time_nsec;
     odometry_msg.header.stamp.sec = time_sec;
 
@@ -189,17 +195,18 @@ void publisher_timer_callback(rcl_timer_t *timer, int64_t last_call_time)
       mutex_exit(&msg_sync_mutex);
     }
 
-    double dt = 0.01;
+    double dt = NS_TO_S_D(time - last_time);
+    last_time = time;
 
-    double vl = joint_state_msg.velocity.data[0];
-    double vr = joint_state_msg.velocity.data[1];
-    double omega = (vr - vl) / 2.0;
-    double lin_vel = (vl + vr) / 2.0;
+    double lin_l = joint_state_msg.velocity.data[0] * (wheel_diameter / 2.0);
+    double lin_r = joint_state_msg.velocity.data[1] * (wheel_diameter / 2.0);
+    double omega = (lin_r - lin_l) / wheel_separation;
+    double lin_vel = (lin_l + lin_r) / 2.0;
 
-    odometry_msg.twist.twist.linear.x = lin_vel * cos(robot_state.theta) * dt;
-    odometry_msg.twist.twist.linear.y = lin_vel * sin(robot_state.theta) * dt;
-    robot_state.x += odometry_msg.twist.twist.linear.x;
-    robot_state.y += odometry_msg.twist.twist.linear.y;
+    odometry_msg.twist.twist.linear.x = lin_vel * cos(robot_state.theta);
+    odometry_msg.twist.twist.linear.y = lin_vel * sin(robot_state.theta);
+    robot_state.x += odometry_msg.twist.twist.linear.x * dt;
+    robot_state.y += odometry_msg.twist.twist.linear.y * dt;
 
     robot_state.theta += omega * dt;
     odometry_msg.twist.twist.angular.z = omega;
@@ -297,8 +304,8 @@ bool create_entities()
   // set non zero values on diagonals of covariance matrices for velocity and position
   for (size_t i = 0; i < 36; i += 6)
   {
-    odometry_msg.pose.covariance[i] = 0.0001;
-    odometry_msg.twist.covariance[i] = 0.0001;
+    odometry_msg.pose.covariance[i] = 0.01;
+    odometry_msg.twist.covariance[i] = 0.01;
   }
 
   // synchronize time between uROS and uROS agent
@@ -329,33 +336,42 @@ void destroy_entities()
 
 inline void set_control(uint pin_forward, uint pin_backward, double value)
 {
+  if (abs(value) < 0.01)
+  {
+    pwm_set_gpio_level(pin_forward, uint16_t(0));
+    pwm_set_gpio_level(pin_backward, uint16_t(0));
+    return;
+  }
   if (value > 0.0)
   {
-    pwm_set_gpio_level(pin_forward, uint16_t(value * double(MAX_PWM_VAL)));
+    // Remeber kids. First we are clearing other PWM channel before we assign new controls
+    pwm_set_gpio_level(pin_backward, uint16_t(0));
+    pwm_set_gpio_level(pin_forward, uint16_t(value * double(PWM_RESIZE_FACTOR)));
   }
   else
   {
-    pwm_set_gpio_level(pin_backward, uint16_t(-value * double(MAX_PWM_VAL)));
+    pwm_set_gpio_level(pin_forward, uint16_t(0));
+    pwm_set_gpio_level(pin_backward, uint16_t(-value * double(PWM_RESIZE_FACTOR)));
   }
 }
 
 void core1_entry()
 {
-  // 25 Hz
-  const uint64_t loop_time_us = 40000;
+  // 50 Hz
+  const uint64_t loop_time_us = 20000;
 
   // define PID for wheels
   PID_stat_t left_wheel_pid_stats = {
-      .kp = 0.0,
-      .ki = 0.4,
+      .kp = 0.2,
+      .ki = 0.5,
       .kd = 0.0,
       .out_min = -1.0,
       .out_max = 1.0,
       .dt = US_TO_S_D(loop_time_us)};
 
   PID_stat_t right_wheel_pid_stats = {
-      .kp = 0.0,
-      .ki = 0.4,
+      .kp = 0.2,
+      .ki = 0.5,
       .kd = 0.0,
       .out_min = -1.0,
       .out_max = 1.0,
@@ -382,6 +398,11 @@ void core1_entry()
   setup_pin_pwm(8);
   setup_pin_pwm(9);
 
+  pwm_set_gpio_level(10, uint16_t(0));
+  pwm_set_gpio_level(11, uint16_t(0));
+  pwm_set_gpio_level(8, uint16_t(0));
+  pwm_set_gpio_level(9, uint16_t(0));
+
   while (true)
   {
     start_time = get_absolute_time();
@@ -404,12 +425,27 @@ void core1_entry()
     local_left_wheel_state.velocity = (local_left_wheel_state.position - last_position_left) / US_TO_S_D(loop_time_us);
     double left_wheel_error = local_left_wheel_state.velocity - local_left_wheel_setpoint;
     double left_wheel_control = pid_compute(&left_wheel_pid_stats, left_wheel_error);
-    set_control(11, 10, left_wheel_control);
+    // Get rid of annoying beeping while stopped
+    if (abs(local_left_wheel_setpoint) <= 0.01 && abs(left_wheel_error) <= 0.01)
+    {
+      set_control(11, 10, 0.0);
+    }
+    else
+    {
+      set_control(11, 10, left_wheel_control);
+    }
 
     local_right_wheel_state.velocity = (local_right_wheel_state.position - last_position_right) / US_TO_S_D(loop_time_us);
     double right_wheel_error = local_right_wheel_state.velocity - local_right_wheel_setpoint;
     double right_wheel_control = pid_compute(&right_wheel_pid_stats, right_wheel_error);
-    set_control(8, 9, right_wheel_control);
+    if (abs(local_right_wheel_setpoint) <= 0.01 && abs(right_wheel_error) <= 0.01)
+    {
+      set_control(8, 9, 0.0);
+    }
+    else
+    {
+      set_control(8, 9, right_wheel_control);
+    }
 
     // Non blocking acquire of mutex
     if (mutex_try_enter(&msg_sync_mutex, NULL))

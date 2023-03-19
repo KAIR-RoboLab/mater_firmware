@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define MAX_PWM_VAL (65535)
+#define PWM_RESIZE_FACTOR (65535)
 
 void setup_pin_pwm(uint8_t pin);
 
