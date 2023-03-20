@@ -203,10 +203,9 @@ void publisher_timer_callback(rcl_timer_t *timer, int64_t last_call_time)
     double omega = (lin_r - lin_l) / wheel_separation;
     double lin_vel = (lin_l + lin_r) / 2.0;
 
-    odometry_msg.twist.twist.linear.x = lin_vel * cos(robot_state.theta);
-    odometry_msg.twist.twist.linear.y = lin_vel * sin(robot_state.theta);
-    robot_state.x += odometry_msg.twist.twist.linear.x * dt;
-    robot_state.y += odometry_msg.twist.twist.linear.y * dt;
+    odometry_msg.twist.twist.linear.x = lin_vel;
+    robot_state.x += lin_vel * cos(robot_state.theta) * dt;
+    robot_state.y += lin_vel * sin(robot_state.theta) * dt;
 
     robot_state.theta += omega * dt;
     odometry_msg.twist.twist.angular.z = omega;
@@ -261,8 +260,8 @@ bool create_entities()
       ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, JointState),
       "/joint_states"));
 
-  // create timer running at 10 Hz
-  const unsigned int publish_timer_timeout = 100;
+  // create timer running at 25 Hz
+  const unsigned int publish_timer_timeout = 40;
   RCCHECK(rclc_timer_init_default(
       &publish_timer,
       &support,
@@ -357,8 +356,8 @@ inline void set_control(uint pin_forward, uint pin_backward, double value)
 
 void core1_entry()
 {
-  // 50 Hz
-  const uint64_t loop_time_us = 20000;
+  // 100 Hz
+  const uint64_t loop_time_us = 10000;
 
   // define PID for wheels
   PID_stat_t left_wheel_pid_stats = {
