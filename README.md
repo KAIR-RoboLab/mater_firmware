@@ -1,4 +1,4 @@
-# Muter firmware
+# Mater firmware
 
 ## Changing ROS_DOMAIN_ID
 

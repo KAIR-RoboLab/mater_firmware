@@ -237,7 +237,7 @@ bool create_entities()
   RCCHECK(rclc_support_init_with_options(&support, 0, NULL, &init_options, &allocator));
 
   // create node
-  RCCHECK(rclc_node_init_default(&node, "muter_hardware_node", "", &support));
+  RCCHECK(rclc_node_init_default(&node, "mater_hardware_node", "", &support));
 
   // create subscriber
   RCCHECK(rclc_subscription_init_default(
@@ -251,7 +251,7 @@ bool create_entities()
       &odometry_publisher,
       &node,
       ROSIDL_GET_MSG_TYPE_SUPPORT(nav_msgs, msg, Odometry),
-      "muter/odom"));
+      "mater/odom"));
 
   // create /joint_statestopic publisher
   RCCHECK(rclc_publisher_init_default(
