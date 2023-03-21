@@ -1,11 +1,5 @@
 #include "maker_pi_transport.h"
-
-#include <Arduino.h>
 #include <uxr/client/profile/transport/custom/custom_transport.h>
-
-#include <stdio.h>
-#include <stdbool.h>
-#include <sys/time.h>
 
 #define micro_rollover_useconds 4294967295
 

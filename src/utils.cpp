@@ -1,7 +1,5 @@
 #include "utils.h"
 
-#include <math.h>
-
 void euler_to_quat(float x, float y, float z, double *q)
 {
   double c1 = cos((y) / 2.0);

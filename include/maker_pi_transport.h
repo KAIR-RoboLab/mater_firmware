@@ -2,8 +2,8 @@
 #define MAKER_PI_TRANSPORT__H
 
 #include <Arduino.h>
-#include <stdio.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <sys/time.h>
 
 int clock_gettime(clockid_t unused, struct timespec *tp);
