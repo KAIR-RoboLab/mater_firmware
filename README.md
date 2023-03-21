@@ -10,7 +10,7 @@ build_flags =
 
 ## Pinout
 
-Pinout is based on official [documentation](https://docs.google.com/document/d/1DJASwxgbattM37V4AIlJVR4pxukq0up25LppA8-z_AY/edit). Below table show Groove pin names used in [maker_pi_pins.h](./include/maker_pi_pins.h) file.
+Pinout is based on official [documentation](https://docs.google.com/document/d/1DJASwxgbattM37V4AIlJVR4pxukq0up25LppA8-z_AY/edit).
 
 ### Groove connectors
 
