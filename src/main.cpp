@@ -1,75 +1,46 @@
 #include <Arduino.h>
 
 // standard libraries
+#include <math.h>
 #include <stdio.h>
 #include <time.h>
-#include <math.h>
 
 // RP2040 multicore libraries
 extern "C"
 {
-#include <pico/multicore.h>
 #include <pico_sync/include/pico/mutex.h>
+#include <pico/multicore.h>
 }
 
 // microros dependencies
 #include <micro_ros_platformio.h>
-#include <rcl/rcl.h>
-#include <rcl/error_handling.h>
-#include <rclc/rclc.h>
-#include <rclc/executor.h>
-#include <rcutils/env.h>
-#include <uxr/client/transport.h>
-#include <rmw_microros/rmw_microros.h>
-#include <micro_ros_utilities/type_utilities.h>
 #include <micro_ros_utilities/string_utilities.h>
+#include <micro_ros_utilities/type_utilities.h>
+#include <rcl/error_handling.h>
+#include <rcl/rcl.h>
+#include <rclc/executor.h>
+#include <rclc/rclc.h>
+#include <rcutils/env.h>
+#include <rmw_microros/rmw_microros.h>
+#include <uxr/client/transport.h>
 
 // microros message definitions
-#include <nav_msgs/msg/odometry.h>
 #include <geometry_msgs/msg/twist.h>
-#include <std_msgs/msg/string.h>
-#include <sensor_msgs/msg/joint_state.h>
+#include <nav_msgs/msg/odometry.h>
 #include <sensor_msgs/msg/imu.h>
+#include <sensor_msgs/msg/joint_state.h>
+#include <std_msgs/msg/string.h>
 
 // external libraries
 #include <pio_rotary_encoder.h>
 
 // custom transport layer definition
 #include "maker_pi_transport.h"
-#include "pwm_conf.h"
 #include "pid.h"
+#include "pwm_conf.h"
 #include "utils.h"
 
 #define ERROR_LOOP_LED_PIN (16)
-#define RCCHECK(fn)              \
-  {                              \
-    rcl_ret_t temp_rc = fn;      \
-    if ((temp_rc != RCL_RET_OK)) \
-    {                            \
-      error_loop();              \
-    }                            \
-  }
-#define RCSOFTCHECK(fn)          \
-  {                              \
-    rcl_ret_t temp_rc = fn;      \
-    if ((temp_rc != RCL_RET_OK)) \
-    {                            \
-    }                            \
-  }
-#define EXECUTE_EVERY_N_MS(MS, X)      \
-  do                                   \
-  {                                    \
-    static volatile int64_t init = -1; \
-    if (init == -1)                    \
-    {                                  \
-      init = uxr_millis();             \
-    }                                  \
-    if (uxr_millis() - init > MS)      \
-    {                                  \
-      X;                               \
-      init = uxr_millis();             \
-    }                                  \
-  } while (0)
 
 // error loop used to handle exceptions of uROS
 void error_loop()
@@ -261,11 +232,11 @@ bool create_entities()
       "/joint_states"));
 
   // create timer running at 25 Hz
-  const unsigned int publish_timer_timeout = 40;
+  const unsigned int publish_timer_timeout_ms = 40;
   RCCHECK(rclc_timer_init_default(
       &publish_timer,
       &support,
-      RCL_MS_TO_NS(publish_timer_timeout),
+      RCL_MS_TO_NS(publish_timer_timeout_ms),
       publisher_timer_callback));
 
   // create executor
@@ -278,7 +249,7 @@ bool create_entities()
   odometry_msg.header.frame_id = micro_ros_string_utilities_init("odom");
   odometry_msg.child_frame_id = micro_ros_string_utilities_init("base_link");
 
-  // Initialise /joint_statesmessage
+  // Initialise /joint_states message
   joint_state_msg.header.frame_id = micro_ros_string_utilities_init("base_link");
   joint_state_msg.name.data = (rosidl_runtime_c__String *)malloc(3 * sizeof(rosidl_runtime_c__String));
   joint_state_msg.name.size = 2;

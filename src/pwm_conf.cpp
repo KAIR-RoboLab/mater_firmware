@@ -1,7 +1,4 @@
 #include "pwm_conf.h"
-
-#include <stdint.h>
-
 #include "hardware/pwm.h"
 #include "hardware/gpio.h"
 
